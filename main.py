@@ -2,6 +2,7 @@ import pygame as pg
 import numpy as np
 import math
 import numba
+import taichi as ti
 
 
 # ============== settings ==============
@@ -24,59 +25,41 @@ class Fractal:
         self.x = np.linspace(0, WIDTH, num=WIDTH, dtype=np.float32)
         self.y = np.linspace(0, HEIGHT, num=HEIGHT, dtype=np.float32)
 
-    # ============== Clear Python ==============
+        # ======= Control Settings =======
+        self.vel = 0.01
+        self.zoom, self.scale = 2.2 / HEIGHT, 0.993
+        self.increment = [0, 0]
+        self.max_iter, self.max_iter_limit = 30, 5500
 
-    # def render(self):
-    #     for x in range(WIDTH):
-    #         for y in range(HEIGHT):
-    #             c = (x - offset[0]) * zoom + 1j * (y - offset[1]) * zoom
-    #             z = 0
-    #             num_iter = 0
-    #             for i in range(max_iter):
-    #                 z = z ** 2 + c
-    #                 if abs(z) > 2:
-    #                     break
-    #                 num_iter += 1
-    #             # ======= gradient =======
-    #             # col = int(texture_size * num_iter / max_iter)
-    #             # self.screen_array[x, y] = texture_array[col, col]
-    #
-    #             # ======= white and black=======
-    #             col = int(255 * num_iter / max_iter)
-    #             self.screen_array[x, y] = (col, col, col)
+        print(ti.Vector([0.0, 0.0]))
 
-    # ============== Clear NumPy ==============
-    # def render(self):
-    #     x = (self.x - offset[0]) * zoom
-    #     y = (self.y - offset[1]) * zoom
-    #     c = x + 1j * y[:, None]
-    #
-    #     num_iter = np.full(c.shape, max_iter)
-    #     z = np.empty(c.shape, np.complex64)
-    #     for i in range(max_iter):
-    #         mask = (num_iter == max_iter)
-    #         z[mask] = z[mask] ** 2 + c[mask]
-    #         num_iter[mask & (z.real ** 2 + z.imag ** 2 > 4.0)] = i + 1
-    #
-    #     col = (num_iter.T * texture_size / max_iter).astype(np.uint8)
-    #     self.screen_array = texture_array[col, col]
+        # ======= Time =======
+        self.app_speed = 1 / 4000
+        self.prev_time = pg.time.get_ticks()
+
+    def delta_time(self):
+        time_now = pg.time.get_ticks() - self.prev_time
+        self.prev_time = time_now
+        return time_now * self.app_speed
 
     # ============== Numba ==============
     @staticmethod
     @numba.njit(fastmath=True, parallel=True)
-    def render(screen_array):
+    def render(screen_array, max_local_iter, local_zoom, dx, dy):
+
         for x in numba.prange(WIDTH):
             for y in range(HEIGHT):
-                c = (x - offset[0]) * zoom + 1j * (y - offset[1]) * zoom
+                c = (((x - offset[0]) * local_zoom) - dx) + 1j * (
+                        ((y - offset[1]) * local_zoom) - dy)
                 z = 0
                 num_iter = 0
-                for i in range(max_iter):
+                for i in range(max_local_iter):
                     z = z ** 2 + c
                     if z.real ** 2 + z.imag ** 2 > 4.0:
                         break
                     num_iter += 1
                 # ======= gradient =======
-                col = int(texture_size * num_iter / max_iter)
+                col = int(texture_size * num_iter / max_local_iter)
                 screen_array[x, y] = texture_array[col, col]
 
                 # ======= white and black=======
@@ -84,8 +67,39 @@ class Fractal:
                 # screen_array[x, y] = (col, col, col)
         return screen_array
 
+    def control(self):
+        pressed_key = pg.key.get_pressed()
+        dt = self.delta_time()
+
+        if pressed_key[pg.K_a]:
+            self.increment[0] += self.vel * dt
+        if pressed_key[pg.K_d]:
+            self.increment[0] -= self.vel * dt
+        if pressed_key[pg.K_w]:
+            self.increment[1] += self.vel * dt
+        if pressed_key[pg.K_s]:
+            self.increment[1] -= self.vel * dt
+
+        if pressed_key[pg.K_UP] or pressed_key[pg.K_DOWN]:
+            inv_scale = 2 - self.scale
+            if pressed_key[pg.K_UP]:
+                self.zoom *= self.scale
+                self.vel *= self.scale
+            if pressed_key[pg.K_DOWN]:
+                self.zoom *= inv_scale
+                self.vel *= inv_scale
+
+        if pressed_key[pg.K_LEFT]:
+            self.max_iter -= 1
+        if pressed_key[pg.K_RIGHT]:
+            self.max_iter += 1
+        self.max_iter = min(max(self.max_iter, 2), self.max_iter_limit)
+
     def update(self):
-        self.screen_array = self.render(self.screen_array)
+        self.control()
+        self.screen_array = self.render(self.screen_array, self.max_iter, self.zoom,
+                                        self.increment[0],
+                                        self.increment[1])
 
     def draw(self):
         pg.surfarray.blit_array(self.app.screen, self.screen_array)
